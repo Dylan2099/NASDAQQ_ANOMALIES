@@ -119,12 +119,24 @@ if run_button:
                 context_to_display['data'].pop('raw_dataframe', None)
                 context_to_display['data'].pop('processed_dataframe', None)
             
-            # Convertir objetos datetime a string para serialización JSON
-            defdatetime_converter(o):
+            # ---------- INICIO DE LA CORRECCIÓN ----------
+            # Definir la función convertidora ANTES de usarla
+            def datetime_converter_for_json(o): # Renombré ligeramente para evitar confusión con un posible nombre de variable
                 if isinstance(o, datetime):
-                    return o.__str__()
+                    return o.isoformat() # Usar isoformat() es más estándar para JSON
+                # Puedes añadir más conversiones aquí si es necesario para otros tipos no serializables
+                # raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
 
-            st.json(json.dumps(context_to_display, indent=2, default=defaultdatetime_converter))
+            try:
+                # Pasar la REFERENCIA a la función (su nombre)
+                json_output_mcp = json.dumps(context_to_display, indent=2, default=datetime_converter_for_json)
+                st.json(json_output_mcp)
+            except TypeError as te:
+                st.error(f"Error al serializar el MCP a JSON: {te}")
+                st.text("Puede haber tipos de datos no manejados en el contexto.")
+                # Imprimir una versión más simple del contexto si falla la serialización completa
+                st.text(str(context_to_display))
+            # ---------- FIN DE LA CORRECCIÓN ----------
 
     except ValueError as ve:
         st.error(f"Error de Valor durante el proceso: {ve}")
