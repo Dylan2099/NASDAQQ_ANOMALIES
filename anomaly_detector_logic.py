@@ -1,5 +1,5 @@
 # ==============================================================================
-# SOLUCIÓN END-TO-END: DETECTOR DE ANOMALÍAS DE MERCADO - LÓGICA
+# END-TO-END SOLUTION: MARKET ANOMALY DETECTOR - LOGIC
 # Dylan Saenz - 06/2025
 # ==============================================================================
 import yfinance as yf
@@ -10,23 +10,23 @@ import json
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
-# --- CONFIGURACIÓN DEL MODELO POR DEFECTO ---
+# --- DEFAULT MODEL CONFIGURATION ---
 DEFAULT_MODEL_CONFIG = {
     "name": "IsolationForest_configurable",
     "params": {
-        "contamination": 0.02, # Este será configurable desde el UI
+        "contamination": 0.02, # This will be configurable from the UI
         "random_state": 42
     }
 }
 
 # ==============================================================================
-# PUNTO 4 y 5: ARQUITECTURA DE AGENTES Y MODEL CONTEXT PROTOCOL (MCP)
+# POINTS 4 and 5: AGENT ARCHITECTURE AND MODEL CONTEXT PROTOCOL (MCP)
 # ==============================================================================
 
 def initialize_context(ticker, period, model_config_params):
-    """(MCP) Inicia el objeto de contexto que fluirá entre los agentes."""
+    """(MCP) Initializes the context object that will flow between agents."""
     current_model_config = DEFAULT_MODEL_CONFIG.copy()
-    current_model_config["params"].update(model_config_params) # Actualiza con params del UI
+    current_model_config["params"].update(model_config_params) # Update with params from UI
 
     return {
         "run_id": f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
@@ -39,26 +39,26 @@ def initialize_context(ticker, period, model_config_params):
     }
 
 def get_data_agent(context, progress_callback=None):
-    """(Agente 1) Descarga los datos históricos requeridos."""
+    """(Agent 1) Downloads the required historical data."""
     ticker, period = context["input_params"]["ticker"], context["input_params"]["period"]
-    if progress_callback: progress_callback(f"[AGENTE DE DATOS] Descargando datos para {ticker} ({period})...")
+    if progress_callback: progress_callback(f"[DATA AGENT] Downloading data for {ticker} ({period})...")
     
-    # PUNTO 1: Nasdaq ETF price over the past X years
-    data = yf.download(ticker, period=period, auto_adjust=False, progress=False) # progress=False para evitar prints de yfinance
+    # POINT 1: Nasdaq ETF price over the past X years
+    data = yf.download(ticker, period=period, auto_adjust=False, progress=False) # progress=False to avoid yfinance prints
     
     if data.empty:
         context["status"] = "Error: Data Download Failed"
-        context["pipeline_log"].append(f"Error: No se pudieron descargar datos para {ticker}.")
-        raise ValueError(f"No se pudieron descargar datos para {ticker}.")
+        context["pipeline_log"].append(f"Error: Could not download data for {ticker}.")
+        raise ValueError(f"Could not download data for {ticker}.")
     
-    # Manejar MultiIndex si existe (común en yfinance para algunas llamadas)
+    # Handle MultiIndex if it exists (common in yfinance for some calls)
     if isinstance(data.columns, pd.MultiIndex):
         data.columns = ['_'.join(col).strip() if isinstance(col, tuple) else col for col in data.columns.values]
-        # Si después de joinear aún quedan nombres genéricos como 'Adj Close_', buscar el correcto
+        # If generic names like 'Adj Close_' still exist after joining, find the correct one
         adj_close_col = next((col for col in data.columns if 'Adj Close' in col), 'Adj Close')
         volume_col = next((col for col in data.columns if 'Volume' in col), 'Volume')
         
-        # Asegurarse que las columnas que necesitamos existen
+        # Ensure the columns we need exist
         required_cols = {adj_close_col: 'Adj Close', volume_col: 'Volume'}
         if not all(col in data.columns for col in required_cols.keys()):
              context["status"] = "Error: Missing required columns after download"
@@ -66,34 +66,32 @@ def get_data_agent(context, progress_callback=None):
              raise ValueError(f"Required columns not found in downloaded data for {ticker}.")
         data = data.rename(columns=required_cols)
 
-
     elif not all(col in data.columns for col in ['Adj Close', 'Volume']):
         context["status"] = "Error: Missing Adj Close or Volume"
         context["pipeline_log"].append(f"Error: Adj Close or Volume column not found for {ticker}.")
-        # Intentar con nombres comunes si falla
+        # Try common names if it fails
         if 'Close' in data.columns and 'Adj Close' not in data.columns:
             data.rename(columns={'Close':'Adj Close'}, inplace=True)
         if not all(col in data.columns for col in ['Adj Close', 'Volume']):
              raise ValueError(f"Adj Close or Volume column not found in downloaded data for {ticker}.")
 
-
     context['data']['raw_dataframe'] = data
     context['status'] = "Data Downloaded"
-    context["pipeline_log"].append("[AGENTE DE DATOS] Descarga completada.")
-    if progress_callback: progress_callback("[AGENTE DE DATOS] Descarga completada.")
+    context["pipeline_log"].append("[DATA AGENT] Download complete.")
+    if progress_callback: progress_callback("[DATA AGENT] Download complete.")
     return context
 
 def preprocess_data_agent(context, progress_callback=None):
-    """(Agente 2) Prepara los datos para el modelo, creando características."""
-    if progress_callback: progress_callback("[AGENTE DE PREPROCESAMIENTO] Creando características...")
+    """(Agent 2) Prepares data for the model, creating features."""
+    if progress_callback: progress_callback("[PREPROCESSING AGENT] Creating features...")
     raw_data = context['data']['raw_dataframe']
     
-    # PUNTO 2: Time Series Data (Date, PRICE) - Usamos 'Adj Close' como PRICE
+    # POINT 2: Time Series Data (Date, PRICE) - We use 'Adj Close' as PRICE
     price_data = raw_data[['Adj Close', 'Volume']].copy()
-    price_data.rename(columns={'Adj Close': 'price'}, inplace=True) # Renombrar aquí simplifica
+    price_data.rename(columns={'Adj Close': 'price'}, inplace=True) # Renaming here simplifies
     
-    # Ingeniería de Características
-    w_vol, w_trend = 7, 21 # Podrían ser parámetros también
+    # Feature Engineering
+    w_vol, w_trend = 7, 21 # Could also be parameters
     price_data['volatility'] = price_data['price'].rolling(window=w_vol).std()
     price_data['change_pct'] = price_data['price'].pct_change() * 100
     price_data['detrended'] = price_data['price'] - price_data['price'].rolling(window=w_trend).mean()
@@ -103,23 +101,23 @@ def preprocess_data_agent(context, progress_callback=None):
     if price_data.empty:
         context["status"] = "Error: Preprocessing resulted in empty data"
         context["pipeline_log"].append("Error: No data left after preprocessing (check rolling windows and data length).")
-        raise ValueError("No data left after preprocessing. El periodo podría ser muy corto para las ventanas de rolling.")
+        raise ValueError("No data left after preprocessing. The period might be too short for the rolling windows.")
 
     context['data']['processed_dataframe'] = price_data
     context['status'] = "Data Preprocessed"
-    context["pipeline_log"].append("[AGENTE DE PREPROCESAMIENTO] Datos listos para el modelo.")
-    if progress_callback: progress_callback("[AGENTE DE PREPROCESAMIENTO] Datos listos para el modelo.")
+    context["pipeline_log"].append("[PREPROCESSING AGENT] Data ready for model.")
+    if progress_callback: progress_callback("[PREPROCESSING AGENT] Data ready for model.")
     return context
 
 def anomaly_detection_agent(context, progress_callback=None):
-    """(Agente 3) Construye, entrena y ejecuta el modelo de detección de anomalías."""
-    if progress_callback: progress_callback("[AGENTE DE MODELADO] Aplicando modelo IA (Isolation Forest)...")
+    """(Agent 3) Builds, trains, and runs the anomaly detection model."""
+    if progress_callback: progress_callback("[MODELING AGENT] Applying AI model (Isolation Forest)...")
     
     price_data = context['data']['processed_dataframe']
     model_config = context['model_config']
     features_to_use = ['price', 'volatility', 'change_pct', 'detrended','relative_volume']
     
-    # Asegurar que todas las features existen
+    # Ensure all features exist
     missing_features = [f for f in features_to_use if f not in price_data.columns]
     if missing_features:
         context["status"] = f"Error: Missing features for model: {', '.join(missing_features)}"
@@ -135,114 +133,116 @@ def anomaly_detection_agent(context, progress_callback=None):
     
     context['results']['anomalies_found'] = anomalies
     context['status'] = "Anomalies Detected"
-    context["pipeline_log"].append(f"[AGENTE DE MODELADO] Se han detectado {len(anomalies)} anomalías.")
-    if progress_callback: progress_callback(f"[AGENTE DE MODELADO] Se han detectado {len(anomalies)} anomalías.")
+    context["pipeline_log"].append(f"[MODELING AGENT] {len(anomalies)} anomalies detected.")
+    if progress_callback: progress_callback(f"[MODELING AGENT] {len(anomalies)} anomalies detected.")
     return context
 
 def reporting_agent(context, progress_callback=None):
-    """(Agente 4) Prepara datos para el reporte y la visualización."""
-    if progress_callback: progress_callback("[AGENTE DE REPORTE] Preparando resultados...")
+    """(Agent 4) Prepares data for the report and visualization."""
+    if progress_callback: progress_callback("[REPORTING AGENT] Preparing results...")
 
     if context['status'] != "Anomalies Detected":
-        context["pipeline_log"].append("El pipeline no se completó exitosamente para generar reporte.")
-        # No generamos error aquí, el status ya lo indica
-        return context, None, None # Devuelve context, None para df, None para fig
+        context["pipeline_log"].append("Pipeline did not complete successfully to generate report.")
+        # We don't raise an error here, status already indicates it
+        return context, None, None # Returns context, None for df, None for fig
 
     anomalies = context['results']['anomalies_found']
     
-    # PUNTO 6: output: date and price of the anomalies
+    # POINT 6: output: date and price of the anomalies
     final_output_df = anomalies[['price']].copy()
     final_output_df.index = final_output_df.index.strftime('%Y-%m-%d')
-    final_output_df.rename(columns={'price': 'Anomalous_Price_USD'}, inplace=True)
+    final_output_df.rename(columns={'price': 'Anomalous_Price_USD'}, inplace=True) # Keeping column name as is, as it's somewhat standard
     
     context['results']['anomalies_report_df'] = final_output_df
     
-    # --- Preparación para Visualización ---
+    # --- Preparation for Visualization ---
     all_data = context['data']['processed_dataframe']
     ticker = context['input_params']['ticker']
     
-    plt.style.use('seaborn-v0_8-whitegrid') # Estilo actualizado
-    fig, ax = plt.subplots(figsize=(15, 7)) # Ajustado tamaño para Streamlit
+    plt.style.use('seaborn-v0_8-whitegrid') # Updated style
+    fig, ax = plt.subplots(figsize=(15, 7)) # Adjusted size for Streamlit
 
-    ax.plot(all_data.index, all_data['price'], color='royalblue', lw=1.5, label=f'Precio Histórico {ticker}')
+    ax.plot(all_data.index, all_data['price'], color='royalblue', lw=1.5, label=f'Historical Price {ticker}')
     if not anomalies.empty:
-        ax.scatter(anomalies.index, anomalies['price'], color='crimson', s=80, ec='black', lw=1.5, zorder=5, label=f'Anomalías Detectadas ({len(anomalies)})')
+        ax.scatter(anomalies.index, anomalies['price'], color='crimson', s=80, ec='black', lw=1.5, zorder=5, label=f'Anomalies Detected ({len(anomalies)})')
     
-    ax.set_title(f'Detector de Anomalías de Mercado - {ticker}', fontsize=18, pad=15)
-    ax.set_ylabel('Precio de Cierre Ajustado (USD)', fontsize=14)
-    ax.set_xlabel('Fecha', fontsize=14)
+    ax.set_title(f'Market Anomaly Detector - {ticker}', fontsize=18, pad=15)
+    ax.set_ylabel('Adjusted Close Price (USD)', fontsize=14)
+    ax.set_xlabel('Date', fontsize=14)
     ax.legend(loc='upper left', fontsize=12, fancybox=True, frameon=True, shadow=True)
     ax.grid(True, which='major', linestyle='--', linewidth=0.7)
     
-    # Formatear fechas en el eje X para mejor lectura
+    # Format dates on X-axis for better readability
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
     plt.xticks(rotation=45)
     fig.tight_layout()
     
-    context["pipeline_log"].append("[AGENTE DE REPORTE] Visualización y reporte listos.")
-    if progress_callback: progress_callback("[AGENTE DE REPORTE] Visualización y reporte listos.")
+    context["pipeline_log"].append("[REPORTING AGENT] Visualization and report ready.")
+    if progress_callback: progress_callback("[REPORTING AGENT] Visualization and report ready.")
     
     return context, final_output_df, fig
 
 
-# --- ORQUESTADOR PRINCIPAL (Para pruebas locales, no usado por Streamlit directamente) ---
+# --- MAIN ORCHESTRATOR (For local testing, not used by Streamlit directly) ---
 if __name__ == "__main__":
     
-    # Configuración de la ejecución
-    TICKER_A_ANALIZAR = "QQQ"
-    PERIODO_DE_TIEMPO = "2y"
-    MODEL_PARAMS_FROM_UI = {"contamination": 0.04} # Ejemplo de UI
+    # Execution Configuration
+    TICKER_TO_ANALYZE = "QQQ"
+    TIME_PERIOD = "2y"
+    MODEL_PARAMS_FROM_UI = {"contamination": 0.04} # UI Example
     
-    print(f"Iniciando análisis para {TICKER_A_ANALIZAR}, periodo {PERIODO_DE_TIEMPO}, contaminación {MODEL_PARAMS_FROM_UI['contamination']}")
+    print(f"Starting analysis for {TICKER_TO_ANALYZE}, period {TIME_PERIOD}, contamination {MODEL_PARAMS_FROM_UI['contamination']}")
 
     def simple_progress_printer(message):
         print(message)
 
     try:
-        # 1. Iniciar el Model Context Protocol
-        contexto = initialize_context(TICKER_A_ANALIZAR, PERIODO_DE_TIEMPO, MODEL_PARAMS_FROM_UI)
+        # 1. Initialize Model Context Protocol
+        current_context = initialize_context(TICKER_TO_ANALYZE, TIME_PERIOD, MODEL_PARAMS_FROM_UI)
         
-        # 2. Ejecutar la secuencia de agentes
-        contexto = get_data_agent(contexto, simple_progress_printer)
-        contexto = preprocess_data_agent(contexto, simple_progress_printer)
-        contexto = anomaly_detection_agent(contexto, simple_progress_printer)
+        # 2. Execute agent sequence
+        current_context = get_data_agent(current_context, simple_progress_printer)
+        current_context = preprocess_data_agent(current_context, simple_progress_printer)
+        current_context = anomaly_detection_agent(current_context, simple_progress_printer)
         
-        # 3. Generar el reporte final
-        contexto, df_anomalies, fig_anomalies = reporting_agent(contexto, simple_progress_printer)
+        # 3. Generate final report
+        current_context, df_anomalies, fig_anomalies = reporting_agent(current_context, simple_progress_printer)
         
         print("\n" + "="*50)
-        print("DEMO DE DETECCIÓN DE ANOMALÍAS - RESULTADO FINAL")
+        print("ANOMALY DETECTION DEMO - FINAL RESULT")
         print("="*50)
 
         if df_anomalies is not None and not df_anomalies.empty:
-            print("\n--- ANOMALÍAS DETECTADAS (Output Requerido) ---")
+            print("\n--- ANOMALIES DETECTED (Required Output) ---")
             print(df_anomalies.to_string())
         elif df_anomalies is not None and df_anomalies.empty:
-            print("\n--- NO SE DETECTARON ANOMALÍAS ---")
+            print("\n--- NO ANOMALIES DETECTED ---")
         else:
-            print("\n--- ERROR AL GENERAR REPORTE DE ANOMALÍAS ---")
+            print("\n--- ERROR GENERATING ANOMALY REPORT ---")
             
         if fig_anomalies:
-            print("\n[AGENTE DE REPORTE] Mostrando visualización...")
+            print("\n[REPORTING AGENT] Showing visualization...")
             plt.show()
         
-        # (Opcional) Mostrar el objeto MCP final para demostrar el cumplimiento
-        context_to_print = contexto.copy()
-        if 'raw_dataframe' in context_to_print['data']:
-            del context_to_print['data']['raw_dataframe'] # No imprimir dataframes largos
-        if 'processed_dataframe' in context_to_print['data']:
-            del context_to_print['data']['processed_dataframe']
+        # (Optional) Display final MCP object to demonstrate compliance
+        context_to_print = current_context.copy()
+        if 'data' in context_to_print and isinstance(context_to_print['data'], dict): # Check if 'data' key exists and is a dict
+            if 'raw_dataframe' in context_to_print['data']:
+                del context_to_print['data']['raw_dataframe'] # Clean up to avoid printing long dataframes
+            if 'processed_dataframe' in context_to_print['data']:
+                del context_to_print['data']['processed_dataframe']
 
-        print("\n--- Objeto MCP Final (Trazabilidad) ---")
-        print(json.dumps(context_to_print, indent=2, default=str)) # default=str para manejar datetime
+        print("\n--- Final MCP Object (Traceability) ---")
+        print(json.dumps(context_to_print, indent=2, default=str)) # default=str to handle datetime
         
     except Exception as e:
-        print(f"\n\n--- ERROR FATAL EN EL PIPELINE ---")
+        print(f"\n\n--- FATAL PIPELINE ERROR ---")
         print(f"Error: {e}")
-        # Si el contexto existe, imprimirlo para debug
-        if 'contexto' in locals():
-            print("\n--- Contexto MCP en el momento del error ---")
-            context_to_print = contexto.copy()
-            if 'raw_dataframe' in context_to_print['data']: del context_to_print['data']['raw_dataframe']
-            if 'processed_dataframe' in context_to_print['data']: del context_to_print['data']['processed_dataframe']
-            print(json.dumps(context_to_print, indent=2, default=str))
+        # If context exists, print it for debug
+        if 'current_context' in locals():
+            print("\n--- MCP Context at time of error ---")
+            context_to_print_on_error = current_context.copy()
+            if 'data' in context_to_print_on_error and isinstance(context_to_print_on_error['data'], dict):
+                if 'raw_dataframe' in context_to_print_on_error['data']: del context_to_print_on_error['data']['raw_dataframe']
+                if 'processed_dataframe' in context_to_print_on_error['data']: del context_to_print_on_error['data']['processed_dataframe']
+            print(json.dumps(context_to_print_on_error, indent=2, default=str))
